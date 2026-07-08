@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+backend: pytorch
+
+# --- Parallelism Settings ---
+# Reconfigured for multi-node deployment. By setting these to 1, you treat
+# each of your 16 GPUs as an isolated, independent Data Parallel worker replica.
+tensor_parallel_size: 8
+pipeline_parallel_size: 2
+
+# --- Generation Settings ---
+# Optimized for Qwen3's native 32k context capability.
+max_batch_size: 256
+max_num_tokens: 32768
+max_seq_len: 32768
+
+# --- KV Cache Configuration ---
+kv_cache_config:
+  free_gpu_memory_fraction: 0.7 
+  dtype: fp8
+
+# --- Cuda Graph Configuration ---
+cuda_graph_config:
+  enable_padding: true
+  batch_sizes: [1, 2, 4, 8, 16, 32, 64, 128, 256]

@@ -17,11 +17,11 @@ NUM_GPUS_PER_NODE=${NUM_GPUS_PER_NODE:-8}
 
 NUM_PREFILL_NODES=${NUM_PREFILL_NODES:-1}
 NUM_PREFILL_WORKERS=${NUM_PREFILL_WORKERS:-1}
-PREFILL_ENGINE_CONFIG="${PREFILL_ENGINE_CONFIG:-/mnt/examples/basics/multinode/trtllm/prefill.yaml}"
+PREFILL_ENGINE_CONFIG="${PREFILL_ENGINE_CONFIG:-/mnt/examples/basics/multinode/trtllm/prefill-llama3.yaml}"
 
 NUM_DECODE_NODES=${NUM_DECODE_NODES:-1}
 NUM_DECODE_WORKERS=${NUM_DECODE_WORKERS:-1}
-DECODE_ENGINE_CONFIG="${DECODE_ENGINE_CONFIG:-/mnt/examples/basics/multinode/trtllm/decode.yaml}"
+DECODE_ENGINE_CONFIG="${DECODE_ENGINE_CONFIG:-/mnt/examples/basics/multinode/trtllm/decode-llama3.yaml}"
 
 # Automate settings of certain variables for convenience, but you are free
 # to manually set these for more control as well.
@@ -55,8 +55,8 @@ export HF_HUB_OFFLINE=1
 
 mkdir -p /tmp/flashinfer_jit /tmp/flashinfer_cache /tmp/huggingface /tmp/dynamo_triton /tmp/pip_cache
 
-export MODEL_PATH="/hpelustre/shruti/.cache/huggingface/hub/models--Qwen--Qwen3-0.6B/snapshots/c1899de289a04d12100db370d81485cdf75e47ca"
-export SERVED_MODEL_NAME="Qwen/Qwen3-0.6B"
+export MODEL_PATH="/hpelustre/shruti/.cache/huggingface/hub/models--meta-llama--Llama-3.1-70B-Instruct/snapshots/1605565b47bb9346c5515c34102e054115b4f98b"
+export SERVED_MODEL_NAME="meta-llama/Llama-3.1-70B-Instruct"
 
 # NOTE: Output streamed to stdout for ease of understanding the example, but
 # in practice you would probably set `srun --output ... --error ...` to pipe

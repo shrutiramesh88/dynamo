@@ -1,0 +1,41 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+tensor_parallel_size: 8
+pipeline_parallel_size: 1
+moe_expert_parallel_size: 1
+enable_attention_dp: false
+
+max_seq_len: 8192 #8192 best for 2k-2k and 4k-2k #4096 best for 1k-2k
+# OPTIMIZED: Adjusted to a healthy scheduler ceiling for a 512-wide token decode step
+max_num_tokens: 8192
+
+
+trust_remote_code: true
+backend: pytorch
+# Overlap scheduler not currently supported in prefill only workers.
+disable_overlap_scheduler: false #true
+
+cuda_graph_config:
+  enable_padding: true
+  max_batch_size: 512
+  batch_sizes: [32, 64, 128, 192, 256, 320, 384, 448, 512]
+
+kv_cache_config:
+  free_gpu_memory_fraction: 0.85 #0.90-perf low 0.95-error
+  dtype: fp8
+
+cache_transceiver_config:
+  backend: DEFAULT
+

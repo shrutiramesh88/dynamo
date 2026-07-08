@@ -36,6 +36,25 @@ if [[ -n ${MODALITY} ]]; then
   EXTRA_ARGS+="--modality ${MODALITY} "
 fi
 
+#pip install nvidia-modelopt[hf]
+export HOME="/tmp"
+export XDG_CACHE_HOME="/tmp"
+export PIP_CACHE_DIR="/tmp/pip_cache"
+export FLASHINFER_WORKSPACE_DIR="/tmp/flashinfer_jit"
+export FLASHINFER_CACHE_DIR="/tmp/flashinfer"
+export HF_HOME="/tmp/huggingface"
+export TRITON_CACHE_DIR="/tmp/dynamo_triton"
+export TRTLLM_HANG_DETECTION_TIMEOUT=1200
+
+#export WORLD_SIZE=4
+#export TRTLLM_MAX_WORKSPACE_SIZE=4294967296  # Set to 4GB
+
+HEAD_NODE_IP=$(hostname -I | awk '{print $1}')
+#export ETCD_ENDPOINTS="$HEAD_NODE_IP:2379"
+#export NATS_SERVER="nats://$HEAD_NODE_IP:4222"
+export ETCD_ENDPOINTS="172.23.0.27:2379"
+export NATS_SERVER="nats://172.23.0.27:4222"
+
 trtllm-llmapi-launch \
   python3 -m dynamo.trtllm \
     --model-path "${MODEL_PATH}" \

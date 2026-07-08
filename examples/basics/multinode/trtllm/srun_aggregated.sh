@@ -4,27 +4,28 @@
 
 # This is one of the only variables that must be set currently, most of the rest may
 # just work out of the box if following the steps in the README.
-IMAGE="${IMAGE:-""}"
+IMAGE="${IMAGE:-"/hpelustre/shruti/qwen-experiments/ai-dynamo-tensorrtllm-runtime-1.1.1.sqsh"}"
 
 # Set to mount current host directory to /mnt inside the container as an example,
 # but you may freely customize the mounts based on your cluster. A common practice
 # is to mount paths to NFS storage for common scripts, model weights, etc.
 # NOTE: This can be a comma separated list of multiple mounts as well.
-DEFAULT_MOUNT="${PWD}/../../../../:/mnt"
+DEFAULT_MOUNT="${PWD}/../../../..:/mnt,/hpelustre:/hpelustre"
 MOUNTS="${MOUNTS:-${DEFAULT_MOUNT}}"
 
 # Example values, assuming 4 nodes with 4 GPUs on each node, such as 4xGB200 nodes.
 # For 8xH100 nodes as an example, you may set this to 2 nodes x 8 gpus/node instead.
-NUM_NODES=${NUM_NODES:-4}
-NUM_GPUS_PER_NODE=${NUM_GPUS_PER_NODE:-4}
+NUM_NODES=${NUM_NODES:-2}
+NUM_GPUS_PER_NODE=${NUM_GPUS_PER_NODE:-8}
 
-export ENGINE_CONFIG="${ENGINE_CONFIG:-/mnt/examples/backends/trtllm/engine_configs/deepseek-r1/agg/wide_ep/wide_ep_agg.yaml}"
+export ENGINE_CONFIG="${ENGINE_CONFIG:-/mnt/examples/basics/multinode/trtllm/aggregated.yaml}"
 
 # Automate settings of certain variables for convenience, but you are free
 # to manually set these for more control as well.
 ACCOUNT="$(sacctmgr -nP show assoc where user=$(whoami) format=account)"
 export HEAD_NODE="${SLURMD_NODENAME}"
-export HEAD_NODE_IP="$(hostname -i)"
+export HEAD_NODE_IP="$(hostname -I | awk '{print $1}')"
+#export HEAD_NODE_IP="$(hostname -i)"
 export ETCD_ENDPOINTS="${HEAD_NODE_IP}:2379"
 export NATS_SERVER="nats://${HEAD_NODE_IP}:4222"
 
@@ -35,6 +36,20 @@ if [[ -z ${IMAGE} ]]; then
        "https://github.com/ai-dynamo/dynamo/tree/main/docs/backends/trtllm/README.md#build-container"
   exit 1
 fi
+
+export XDG_CACHE_HOME="/tmp"
+export PIP_CACHE_DIR="/tmp/pip_cache"
+export FLASHINFER_WORKSPACE_DIR="/tmp/flashinfer_jit"
+export FLASHINFER_CACHE_DIR="/tmp/flashinfer"
+export HF_HOME="/tmp/huggingface"
+export TRITON_CACHE_DIR="/tmp/dynamo_triton"
+export HF_HUB_OFFLINE=1
+
+mkdir -p /tmp/flashinfer_jit /tmp/flashinfer_cache /tmp/huggingface /tmp/dynamo_triton /tmp/pip_cache
+
+export MODEL_PATH="/hpelustre/shruti/.cache/huggingface/hub/models--Qwen--Qwen3-0.6B/snapshots/c1899de289a04d12100db370d81485cdf75e47ca"
+export SERVED_MODEL_NAME="Qwen/Qwen3-0.6B"
+
 
 # NOTE: Output streamed to stdout for ease of understanding the example, but
 # in practice you would probably set `srun --output ... --error ...` to pipe
