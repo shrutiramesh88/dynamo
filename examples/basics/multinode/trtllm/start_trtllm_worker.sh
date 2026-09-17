@@ -36,6 +36,7 @@ if [[ -n ${MODALITY} ]]; then
   EXTRA_ARGS+="--modality ${MODALITY} "
 fi
 
+
 #pip install nvidia-modelopt[hf]
 export HOME="/tmp"
 export XDG_CACHE_HOME="/tmp"
@@ -52,8 +53,9 @@ export TRTLLM_HANG_DETECTION_TIMEOUT=1200
 HEAD_NODE_IP=$(hostname -I | awk '{print $1}')
 #export ETCD_ENDPOINTS="$HEAD_NODE_IP:2379"
 #export NATS_SERVER="nats://$HEAD_NODE_IP:4222"
-export ETCD_ENDPOINTS="172.23.0.27:2379"
-export NATS_SERVER="nats://172.23.0.27:4222"
+export ETCD_ENDPOINTS="10.140.0.16:2379"
+export NATS_SERVER="nats://10.140.0.16:4222"
+
 
 trtllm-llmapi-launch \
   python3 -m dynamo.trtllm \

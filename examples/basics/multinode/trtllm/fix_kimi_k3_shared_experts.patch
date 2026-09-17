@@ -1,0 +1,122 @@
+diff --git a/model.py b/model.py
+--- a/usr/local/lib/python3.12/dist-packages/vllm/models/kimi_k3/nvidia/model.py
++++ b/usr/local/lib/python3.12/dist-packages/vllm/models/kimi_k3/nvidia/model.py
+@@ -936,6 +936,107 @@ class KimiDecoderLayer(nn.Module):
+         hidden_states = self.mlp(hidden_states)
+         return hidden_states, prefix_sum, residual
+
++    def load_weights(
++        self,
++        weights: Iterable[
++            tuple[str, torch.Tensor] | tuple[str, torch.Tensor, dict[str, Any]]
++        ],
++    ) -> set[str]:
++        """Load weights scoped to this decoder layer.
++
++        KimiDecoderLayer must have a load_weights method to prevent
++        AutoWeightsLoader from recursing into children (KimiMoE -> KimiMLP)
++        where it would fail because KimiMLP uses fused gate_up_proj but the
++        checkpoint has separate gate_proj/up_proj for shared_experts.
++
++        Without this method, AutoWeightsLoader recurses and encounters
++        gate_proj.weight at the KimiMLP level, which doesn't match the
++        fused gate_up_proj.weight parameter -> KeyError.
++        """
++        stacked_params_mapping = [
++            (".gate_up_proj", ".gate_proj", 0),
++            (".gate_up_proj", ".up_proj", 1),
++        ]
++        use_mega_moe = any(
++            module.use_mega_moe
++            for module in self.modules()
++            if isinstance(module, KimiMoE)
++        )
++        if self.config.is_moe and use_mega_moe:
++            expert_params_mapping = make_kimi_k3_mega_moe_expert_params_mapping(
++                self.config.num_experts
++            )
++        elif self.config.is_moe:
++            expert_params_mapping = fused_moe_make_expert_params_mapping(
++                self,
++                ckpt_gate_proj_name="w1",
++                ckpt_down_proj_name="w2",
++                ckpt_up_proj_name="w3",
++                num_experts=self.config.num_experts,
++            )
++        else:
++            expert_params_mapping = []
++        params_dict = dict(self.named_parameters())
++        loaded_params: set[str] = set()
++        for args in weights:
++            name, loaded_weight = args[0], args[1]
++            kwargs: dict[str, Any] = args[2] if len(args) > 2 else {}
++            if "rotary_emb.inv_freq" in name:
++                continue
++            spec_layer = get_spec_layer_idx_from_weight_name(self.config, name)
++            if spec_layer is not None:
++                continue
++            if "rotary_emb.cos_cached" in name or "rotary_emb.sin_cached" in name:
++                continue
++            for param_name, weight_name, shard_id in stacked_params_mapping:
++                if weight_name not in name:
++                    continue
++                if ("mlp.experts." in name) and name not in params_dict:
++                    continue
++                name_mapped = name.replace(weight_name, param_name)
++                if name_mapped not in params_dict:
++                    continue
++                name = name_mapped
++                if name.endswith(".bias") and name not in params_dict:
++                    continue
++                if is_pp_missing_parameter(name, self):
++                    continue
++                param = params_dict[name]
++                weight_loader = param.weight_loader
++                weight_loader(param, loaded_weight, shard_id)
++                break
++            else:
++                for (
++                    expert_param_name,
++                    expert_weight_name,
++                    expert_id,
++                    expert_shard_id,
++                ) in expert_params_mapping:
++                    if expert_weight_name not in name:
++                        continue
++                    name = name.replace(expert_weight_name, expert_param_name)
++                    if is_pp_missing_parameter(name, self):
++                        continue
++                    param = params_dict[name]
++                    weight_loader = param.weight_loader
++                    weight_loader(
++                        param,
++                        loaded_weight,
++                        name,
++                        expert_id=expert_id,
++                        shard_id=expert_shard_id,
++                    )
++                    break
++                else:
++                    if (
++                        name.endswith(".bias")
++                        and name not in params_dict
++                        and not self.config.is_linear_attn
++                    ):
++                        continue
++                    remapped_name = maybe_remap_kv_scale_name(name, params_dict)
++                    if remapped_name is None:
++                        continue
++                    name = remapped_name
++                    if is_pp_missing_parameter(name, self):
++                        continue
++                    param = params_dict[name]
++                    weight_loader = getattr(
++                        param, "weight_loader", default_weight_loader
++                    )
++                    weight_loader(param, loaded_weight, **kwargs)
++            loaded_params.add(name)
++        return loaded_params
++
+ 
+ class KimiLinearModel(nn.Module, EagleModelMixin):
+     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):

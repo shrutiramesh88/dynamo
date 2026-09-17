@@ -1,0 +1,130 @@
+#!/bin/bash
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+if [[ -z ${MODEL_PATH} ]]; then
+    echo "ERROR: MODEL_PATH was not set."
+    echo "ERROR: MODEL_PATH must be set to either the HuggingFace ID or locally " \
+         "downloaded path to the model weights. Since Deepseek R1 is large, it is " \
+         "recommended to pre-download them to a shared location and provide the path."
+    exit 1
+fi
+
+if [[ -z ${SERVED_MODEL_NAME} ]]; then
+    echo "WARNING: SERVED_MODEL_NAME was not set. It will be derived from MODEL_PATH."
+fi
+
+
+
+#EXTRA_ARGS=""
+EXTRA_ARGS="${EXTRA_ARGS:-}"
+if [[ -n ${DISAGGREGATION_MODE} ]]; then
+  EXTRA_ARGS+="--disaggregation-mode ${DISAGGREGATION_MODE} "
+  # FIX: Map DISAGGREGATION_MODE to the required KV transfer roles
+  if [[ "${DISAGGREGATION_MODE}" == "prefill" ]]; then
+     EXTRA_ARGS+='--kv-transfer-config {"kv_connector":"NixlConnector","kv_role":"kv_producer"} '
+  elif [[ "${DISAGGREGATION_MODE}" == "decode" ]]; then
+     EXTRA_ARGS+='--kv-transfer-config {"kv_connector":"NixlConnector","kv_role":"kv_consumer"} '
+  fi
+fi
+
+# Only publish KV events if using KV-aware routing (not needed for round-robin)
+if [[ -n ${PUBLISH_KV_EVENTS} ]] && [[ ${PUBLISH_KV_EVENTS} == "true" ]]; then
+  EXTRA_ARGS+="--publish-events-and-metrics "
+fi
+
+if [[ -n ${MODALITY} ]]; then
+  EXTRA_ARGS+="--modality ${MODALITY} "
+fi
+
+
+#pip install nvidia-modelopt[hf]
+export HOME="/tmp"
+export XDG_CACHE_HOME="/tmp"
+export PIP_CACHE_DIR="/tmp/pip_cache"
+export FLASHINFER_WORKSPACE_DIR="/tmp/flashinfer_jit"
+export FLASHINFER_CACHE_DIR="/tmp/flashinfer_cache"
+export HF_HOME="/tmp/huggingface"
+export TRITON_CACHE_DIR="/tmp/dynamo_triton"
+#export TRTLLM_HANG_DETECTION_TIMEOUT=1200
+
+export UCX_RCACHE_MAX_UNRELEASED=1024
+
+# PYTORCH_CUDA_ALLOC_CONF is unset — the cumem allocator (--enable-cumem-allocator)
+# manages expandable segments internally and is compatible with NixlConnector KV transfer.
+# Setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True externally would conflict.
+#unset PYTORCH_CUDA_ALLOC_CONF
+
+#export WORLD_SIZE=4
+#export TRTLLM_MAX_WORKSPACE_SIZE=4294967296  # Set to 4GB
+
+# Use HEAD_NODE_IP from the main script env if set, otherwise derive from head node hostname
+if [[ -z "${HEAD_NODE_IP}" ]]; then
+  HEAD_NODE_IP="10.140.0.16"
+fi
+export ETCD_ENDPOINTS="${HEAD_NODE_IP}:2379"
+export NATS_SERVER="nats://${HEAD_NODE_IP}:4222"
+
+#export VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS=0
+
+#export VLLM_USE_V1=0
+#export VLLM_USE_DEEP_GEMM=1		
+#export VLLM_ALL2ALL_BACKEND="pplx"		
+
+#trtllm-llmapi-launch \
+#dynamo-vllm-launch \
+#export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+#export EXTRA_ARGS="--enable-cumem-allocator ${EXTRA_ARGS}"
+#unset PYTORCH_CUDA_ALLOC_CONF
+
+# cumem allocator required for NixlConnector KV transfer.
+# expandable_segments set below to reduce native allocator fragmentation.
+#export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True,roundup_power2_divisions:16,max_split_size_mb:256"
+
+#export EXTRA_ARGS="--gpu-memory-utilization 0.70 ${EXTRA_ARGS}"
+#export VLLM_EXECUTOR_CLASS="gpu_executor"
+#export VLLM_MULTIPROC_EXECUTOR=0
+
+
+#export VLLM_DISABLE_TORCHAO=1
+export VLLM_USE_V1=1
+# PYTORCH_CUDA_ALLOC_CONF left unset — default allocator works better with MLA KV cache
+
+#export EXTRA_ARGS="--quantization compressed-tensors --gpu-memory-utilization 0.90 --max-model-len 8192 --max-num-seqs 64 --max-num-batched-tokens 8192 --pipeline-parallel-size 1 --skip-mm-profiling ${EXTRA_ARGS}"
+
+export VLLM_ATTENTION_USE_PREFILL_QUERY_QUANTIZATION=1
+export EXTRA_ARGS="--quantization compressed-tensors \
+	--gpu-memory-utilization 0.95 \
+	--max-model-len 8192 \
+	--max-num-seqs 256 \
+	--max-num-batched-tokens 8192 \
+	--enable-chunked-prefill \
+	--kv-cache-dtype fp8 \
+	--pipeline-parallel-size 1 \
+	--skip-mm-profiling ${EXTRA_ARGS}"
+
+#export VLLM_DISABLE_TORCHAO=1
+
+# FIX: Override Kimi-K3 model.py with the patched version that fixes
+# shared_experts gate_proj/up_proj fusion. The pre-built fixed file
+# includes both the KimiDecoderLayer.load_weights fix and a fix to
+# KimiMoE.load_weights that allows shared_experts weights to pass
+# through stacked_params_mapping for gate_proj/up_proj fusion.
+# With --container-writable we can cp directly over the original.
+FIXED_MODEL="/mnt/examples/basics/multinode/trtllm/kimi_k3_model_fixed.py"
+if [[ ! -f "${FIXED_MODEL}" ]]; then
+  echo "ERROR: ${FIXED_MODEL} not found. Please ensure the patched model file exists."
+  exit 1
+fi
+TARGET="${TARGET:-/usr/local/lib/python3.12/dist-packages/vllm/models/kimi_k3/nvidia/model.py}"
+cp "${FIXED_MODEL}" "${TARGET}"
+echo "PATCH: Applied ${FIXED_MODEL} -> ${TARGET}"
+
+python3 -m dynamo.vllm \
+    --model "${MODEL_PATH}" \
+    --served-model-name "${SERVED_MODEL_NAME}" \
+    --trust-remote-code \
+    --tensor-parallel-size 8 \
+    --data-parallel-size 1 \
+    --enable-expert-parallel \
+    ${EXTRA_ARGS}

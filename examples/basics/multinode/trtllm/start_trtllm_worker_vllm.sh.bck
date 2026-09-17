@@ -1,0 +1,116 @@
+#!/bin/bash
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+if [[ -z ${MODEL_PATH} ]]; then
+    echo "ERROR: MODEL_PATH was not set."
+    echo "ERROR: MODEL_PATH must be set to either the HuggingFace ID or locally " \
+         "downloaded path to the model weights. Since Deepseek R1 is large, it is " \
+         "recommended to pre-download them to a shared location and provide the path."
+    exit 1
+fi
+
+if [[ -z ${SERVED_MODEL_NAME} ]]; then
+    echo "WARNING: SERVED_MODEL_NAME was not set. It will be derived from MODEL_PATH."
+fi
+
+
+
+#EXTRA_ARGS=""
+EXTRA_ARGS="${EXTRA_ARGS:-}"
+if [[ -n ${DISAGGREGATION_MODE} ]]; then
+  EXTRA_ARGS+="--disaggregation-mode ${DISAGGREGATION_MODE} "
+  # FIX: Map DISAGGREGATION_MODE to the required KV transfer roles
+  if [[ "${DISAGGREGATION_MODE}" == "prefill" ]]; then
+     EXTRA_ARGS+='--kv-transfer-config {"kv_connector":"NixlConnector","kv_role":"kv_producer"} '
+  elif [[ "${DISAGGREGATION_MODE}" == "decode" ]]; then
+     EXTRA_ARGS+='--kv-transfer-config {"kv_connector":"NixlConnector","kv_role":"kv_consumer"} '
+  fi
+fi
+
+# Only publish KV events if using KV-aware routing (not needed for round-robin)
+if [[ -n ${PUBLISH_KV_EVENTS} ]] && [[ ${PUBLISH_KV_EVENTS} == "true" ]]; then
+  EXTRA_ARGS+="--publish-events-and-metrics "
+fi
+
+if [[ -n ${MODALITY} ]]; then
+  EXTRA_ARGS+="--modality ${MODALITY} "
+fi
+
+
+#pip install nvidia-modelopt[hf]
+export HOME="/tmp"
+export XDG_CACHE_HOME="/tmp"
+export PIP_CACHE_DIR="/tmp/pip_cache"
+export FLASHINFER_WORKSPACE_DIR="/tmp/flashinfer_jit"
+export FLASHINFER_CACHE_DIR="/tmp/flashinfer_cache"
+export HF_HOME="/tmp/huggingface"
+export TRITON_CACHE_DIR="/tmp/dynamo_triton"
+#export TRTLLM_HANG_DETECTION_TIMEOUT=1200
+
+export UCX_RCACHE_MAX_UNRELEASED=1024
+
+export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
+
+#export WORLD_SIZE=4
+#export TRTLLM_MAX_WORKSPACE_SIZE=4294967296  # Set to 4GB
+
+HEAD_NODE_IP=$(hostname -I | awk '{print $1}')
+#export ETCD_ENDPOINTS="$HEAD_NODE_IP:2379"
+#export NATS_SERVER="nats://$HEAD_NODE_IP:4222"
+export ETCD_ENDPOINTS="10.140.0.16:2379"
+export NATS_SERVER="nats://10.140.0.16:4222"
+
+#export VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS=0
+
+#export VLLM_USE_V1=0
+#export VLLM_USE_DEEP_GEMM=1		
+#export VLLM_ALL2ALL_BACKEND="pplx"		
+#export VLLM_USE_V1=0
+
+#trtllm-llmapi-launch \
+#dynamo-vllm-launch \
+#export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+#export EXTRA_ARGS="--enable-cumem-allocator ${EXTRA_ARGS}"
+#unset PYTORCH_CUDA_ALLOC_CONF
+
+#export EXTRA_ARGS="--gpu-memory-utilization 0.70 ${EXTRA_ARGS}"
+#export VLLM_EXECUTOR_CLASS="gpu_executor"
+#export VLLM_MULTIPROC_EXECUTOR=0
+
+
+export EXTRA_ARGS="--quantization compressed-tensors --enable-cumem-allocator --gpu-memory-utilization 0.22 --max-model-len 4096 --max-num-seqs 64 --max-num-batched-tokens 4096 ${EXTRA_ARGS}"
+
+#export VLLM_DISABLE_TORCHAO=1
+
+# FIX: Override Kimi-K3 model.py with patched version for shared_experts weight loading
+# The container filesystem is read-only. We copy-and-patch to /tmp and use a
+# custom sitecustomize.py (Python's standard hook for per-site config) that
+# runs on interpreter startup to insert the override into sys.path.
+PATCH_SRC="/mnt/examples/basics/multinode/trtllm/fix_kimi_k3_shared_experts.patch"
+PATCHED_DIR="/tmp/vllm_patch/vllm/models/kimi_k3/nvidia"
+ORIG="/usr/local/lib/python3.12/dist-packages/vllm/models/kimi_k3/nvidia/model.py"
+if [[ -f "${PATCH_SRC}" ]] && [[ -f "${ORIG}" ]]; then
+  mkdir -p "${PATCHED_DIR}"
+  cp "${ORIG}" "${PATCHED_DIR}/model.py"
+  if patch -p0 -N "${PATCHED_DIR}/model.py" < "${PATCH_SRC}"; then
+    echo "Applied shared_experts weight loading fix."
+    # sitecustomize.py is Python's standard per-site config hook.
+    # It runs automatically before any user code on interpreter startup.
+    mkdir -p /tmp/python_startup
+    cat > /tmp/python_startup/sitecustomize.py << 'PYEOF'
+import sys
+sys.path.insert(0, '/tmp/vllm_patch')
+PYEOF
+    export PYTHONPATH="/tmp/python_startup:${PYTHONPATH}"
+  fi
+fi
+
+python3 -m dynamo.vllm \
+    --model "${MODEL_PATH}" \
+    --served-model-name "${SERVED_MODEL_NAME}" \
+    --trust-remote-code \
+    --tensor-parallel-size 8 \
+    --data-parallel-size 1 \
+    --enable-expert-parallel \
+    ${EXTRA_ARGS}
